@@ -1,0 +1,52 @@
+{
+    "name": "antigravity-sdk",
+    "version": "1.0.0",
+    "description": "Community SDK for building extensions for Antigravity IDE",
+    "main": "dist/index.js",
+    "types": "dist/index.d.ts",
+    "files": [
+        "dist"
+    ],
+    "scripts": {
+        "build": "tsup",
+        "dev": "tsup --watch",
+        "lint": "eslint src/",
+        "docs": "typedoc --out docs-site src/index.ts",
+        "prepublishOnly": "npm run build"
+    },
+    "keywords": [
+        "antigravity",
+        "antigravity-ide",
+        "google-antigravity",
+        "sdk",
+        "cascade",
+        "ai-agent",
+        "vscode-extension"
+    ],
+    "author": "Kanezal",
+    "license": "AGPL-3.0-only",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/Kanezal/antigravity-sdk.git"
+    },
+    "homepage": "https://kanezal.github.io/antigravity-sdk",
+    "engines": {
+        "node": ">=16.0.0"
+    },
+    "peerDependencies": {
+        "@types/vscode": "^1.85.0"
+    },
+    "devDependencies": {
+        "@types/node": "^20.0.0",
+        "@types/vscode": "^1.85.0",
+        "@typescript-eslint/eslint-plugin": "^8.0.0",
+        "@typescript-eslint/parser": "^8.0.0",
+        "eslint": "^9.0.0",
+        "tsup": "^8.0.0",
+        "typedoc": "^0.27.0",
+        "typescript": "^5.0.0"
+    },
+    "dependencies": {
+        "sql.js": "^1.14.0"
+    }
+}

@@ -1,0 +1,15 @@
+node_modules/
+dist/
+docs-site/
+*.tsbuildinfo
+.DS_Store
+
+# Internal reference — not for public repo
+GEMINI.md
+docs/implementation-plan.md
+docs/internals.md
+scripts/
+
+# Extensions (separate repo)
+example-extension/
+xray-extension/
