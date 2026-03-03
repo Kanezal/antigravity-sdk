@@ -129,17 +129,22 @@ export function generateTitleProxyCode(namespace: string = 'default'): string {
     };
     
     console.log('[AG SDK] Title proxy active, custom titles:', Object.keys(_customTitles).length);
+    
+    // Force re-render so custom titles appear immediately
+    // (without waiting for next native summaries update)
+    setTimeout(function(){notifyListeners();},50);
   }
   
   // ── VNode BFS Walk ─────────────────────────────────────────────
   
   function findProvider(){
     if(_provider)return;
+    var panel=document.querySelector(PANEL_SEL);
+    if(!panel||!panel.__k)return;
+    // Throttle only AFTER confirming panel exists (don't block retries when panel isn't mounted)
     var now=Date.now();
     if(_searchTime&&now-_searchTime<30000)return;
     _searchTime=now;
-    var panel=document.querySelector(PANEL_SEL);
-    if(!panel||!panel.__k)return;
     var queue=[panel.__k],visited=0;
     while(queue.length>0&&visited<3000){
       var node=queue.shift();
@@ -281,6 +286,7 @@ export function getTitlesDataFile(namespace: string = 'default'): string {
 /**
  * Get the localStorage key used by the renderer.
  */
-export function getTitlesStorageKey(): string {
-  return TITLES_STORAGE_KEY;
+export function getTitlesStorageKey(namespace: string = 'default'): string {
+  const slug = namespace.replace(/[^a-zA-Z0-9-]/g, '-');
+  return `${TITLES_STORAGE_PREFIX}-${slug}`;
 }

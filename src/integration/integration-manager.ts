@@ -51,6 +51,7 @@ import {
 } from './types';
 import { ScriptGenerator } from './script-generator';
 import { WorkbenchPatcher } from './workbench-patcher';
+import { IntegrityManager } from './integrity-manager';
 import { TitleManager } from './title-manager';
 import { generateTitleProxyCode } from './title-proxy';
 
@@ -72,6 +73,7 @@ export class IntegrationManager implements IIntegrationManager, IDisposable {
     private readonly _configs: Map<string, IntegrationConfig> = new Map();
     private readonly _generator = new ScriptGenerator();
     private readonly _patcher: WorkbenchPatcher;
+    private readonly _integrity: IntegrityManager;
     private readonly _titles = new TitleManager();
     private readonly _namespace: string;
     private _watcher: fs.FSWatcher | null = null;
@@ -86,6 +88,10 @@ export class IntegrationManager implements IIntegrationManager, IDisposable {
     constructor(namespace: string = 'default') {
         this._namespace = namespace;
         this._patcher = new WorkbenchPatcher(namespace);
+        this._integrity = new IntegrityManager(
+            this._patcher.getWorkbenchDir(),
+            namespace,
+        );
     }
 
     // ─── Registration ──────────────────────────────────────────────────
@@ -357,6 +363,7 @@ export class IntegrationManager implements IIntegrationManager, IDisposable {
         } catch { /* ignore */ }
 
         this._patcher.install(script);
+        this._integrity.suppressCheck();
         this._patcher.writeHeartbeat();
 
         const changed = oldContent !== script;
@@ -441,6 +448,7 @@ export class IntegrationManager implements IIntegrationManager, IDisposable {
      */
     async uninstall(): Promise<void> {
         this._patcher.uninstall();
+        this._integrity.releaseCheck();
         this._patcher.removeHeartbeat();
         this.disableAutoRepair();
         log.info('Uninstalled integration. Restart Antigravity to apply.');
@@ -586,6 +594,7 @@ export class IntegrationManager implements IIntegrationManager, IDisposable {
             log.info('Auto-repair: integration lost (Antigravity update?), re-patching...');
             const script = this.build();
             this._patcher.install(script);
+            this._integrity.repair();
             log.info('Auto-repair: re-patched successfully. Restart Antigravity.');
         } catch (err) {
             log.error('Auto-repair failed', err);

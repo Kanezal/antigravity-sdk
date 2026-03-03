@@ -70,7 +70,7 @@ export { LSBridge, Models, type ModelId, type IHeadlessCascadeOptions, type ISen
 export { CascadeManager } from './cascade/cascade-manager';
 
 // Integration
-export { IntegrationManager, TitleManager, IntegrationPoint } from './integration';
+export { IntegrationManager, IntegrityManager, TitleManager, IntegrationPoint } from './integration';
 export type {
     IntegrationConfig,
     IButtonIntegration,

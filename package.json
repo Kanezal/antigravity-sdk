@@ -1,6 +1,6 @@
 {
     "name": "antigravity-sdk",
-    "version": "1.4.0",
+    "version": "1.5.0",
     "description": "Community SDK for building extensions for Antigravity IDE",
     "main": "dist/index.js",
     "types": "dist/index.d.ts",

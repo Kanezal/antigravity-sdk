@@ -185,7 +185,7 @@ export class AntigravitySDK implements IDisposable {
      * Get the SDK version.
      */
     get version(): string {
-        return '1.4.0';
+        return '1.5.0';
     }
 
     /**
