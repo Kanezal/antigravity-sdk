@@ -1,17 +1,20 @@
 /**
  * Integrity Manager — Suppress Antigravity's "corrupt installation" warnings.
  *
- * When the SDK patches workbench.html, Antigravity's IntegrityService detects
- * the checksum mismatch and shows two warnings:
+ * When the SDK patches workbench files, Antigravity's IntegrityService detects
+ * checksum mismatches and shows two warnings:
  *   1. Console WARN ("Installation has been modified on disk")
  *   2. UI Notification ("Your Antigravity installation appears to be corrupt")
  *
- * This class updates the SHA256 hash in product.json after patching, so
+ * This class updates ALL mismatched SHA256 hashes in product.json, so
  * IntegrityService sees isPure=true and produces no warnings at all.
+ *
+ * Handles not just workbench.html but also workbench.desktop.main.js (auto-run fix),
+ * workbench-jetski-agent.html (agent manager patching), and any other modified files.
  *
  * Multi-extension coordination: a registry file (.ag-sdk-integrity.json)
  * in the workbench directory tracks active SDK namespaces and the original
- * hash, so the last extension to uninstall restores the original state.
+ * hashes, so the last extension to uninstall restores the original state.
  *
  * @module integration/integrity-manager
  *
@@ -29,12 +32,9 @@ const log = new Logger('IntegrityManager');
 interface IIntegrityRegistry {
     /** Active SDK namespace slugs. */
     namespaces: string[];
-    /** Original product.json hash for workbench.html (before any SDK patching). */
-    originalHash: string | null;
+    /** Original product.json hashes for ALL checksummed files (before any patching). */
+    originalHashes: Record<string, string>;
 }
-
-/** Relative key for workbench.html in product.json checksums. */
-const WORKBENCH_HTML_KEY = 'vs/code/electron-browser/workbench/workbench.html';
 
 /** Registry filename — lives next to workbench.html. */
 const REGISTRY_FILENAME = '.ag-sdk-integrity.json';
@@ -42,13 +42,14 @@ const REGISTRY_FILENAME = '.ag-sdk-integrity.json';
 /**
  * Manages integrity check suppression for Antigravity's IntegrityService.
  *
- * After patching workbench.html, call `suppressCheck()` to update the SHA256
- * hash in product.json. IntegrityService will see `isPure = true` on next
- * restart, producing zero warnings (both console.warn AND UI notification).
+ * Call `suppressCheck()` after any file patching (workbench.html, main.js, etc.).
+ * It scans ALL files listed in product.json checksums, recomputes hashes for
+ * any that have changed, and updates product.json. IntegrityService will see
+ * `isPure = true` on next restart, producing zero warnings.
  */
 export class IntegrityManager {
     private readonly _productJsonPath: string;
-    private readonly _workbenchHtmlPath: string;
+    private readonly _appOutDir: string;
     private readonly _registryPath: string;
     private readonly _namespace: string;
 
@@ -59,72 +60,80 @@ export class IntegrityManager {
      */
     constructor(workbenchDir: string, namespace: string) {
         this._namespace = namespace;
-        this._workbenchHtmlPath = path.join(workbenchDir, 'workbench.html');
         this._registryPath = path.join(workbenchDir, REGISTRY_FILENAME);
 
         // product.json is at resources/app/product.json
         // workbenchDir is resources/app/out/vs/code/electron-browser/workbench/
-        this._productJsonPath = path.resolve(
-            workbenchDir, '..', '..', '..', '..', '..', 'product.json',
-        );
+        const appDir = path.resolve(workbenchDir, '..', '..', '..', '..', '..');
+        this._productJsonPath = path.join(appDir, 'product.json');
+        this._appOutDir = path.join(appDir, 'out');
     }
 
     /**
-     * Suppress the integrity check by updating workbench.html's hash in product.json.
+     * Suppress the integrity check by updating ALL mismatched hashes in product.json.
      *
-     * Call this after WorkbenchPatcher.install() has written the patched HTML.
-     * The new hash will be picked up by IntegrityService on next AG restart.
+     * Scans every file listed in product.json checksums, recomputes SHA256 for each,
+     * and updates any that have changed. This handles not just workbench.html but also
+     * workbench.desktop.main.js (auto-run fix), jetskiAgent files, etc.
      *
-     * Safe to call multiple times — always recomputes from current file state.
+     * Call this after any file patching. Safe to call multiple times.
      */
     suppressCheck(): void {
         try {
-            // 1. Read product.json
             if (!fs.existsSync(this._productJsonPath)) {
                 log.warn(`product.json not found at ${this._productJsonPath}`);
                 return;
             }
 
-            const productRaw = fs.readFileSync(this._productJsonPath, 'utf8');
-            const productJson = JSON.parse(productRaw);
-
-            if (!productJson.checksums || !(WORKBENCH_HTML_KEY in productJson.checksums)) {
-                log.debug('No checksums entry for workbench.html — nothing to update');
+            const productJson = JSON.parse(fs.readFileSync(this._productJsonPath, 'utf8'));
+            if (!productJson.checksums) {
+                log.debug('No checksums in product.json — nothing to update');
                 return;
             }
 
-            // 2. Save original hash in registry (only if first SDK to register)
+            // 1. Load or create registry, register this namespace
             const registry = this._readRegistry();
-            if (registry.originalHash === null) {
-                registry.originalHash = productJson.checksums[WORKBENCH_HTML_KEY];
-                log.debug(`Saved original hash: ${registry.originalHash}`);
-            }
-
-            // 3. Register this namespace
             if (!registry.namespaces.includes(this._namespace)) {
                 registry.namespaces.push(this._namespace);
             }
+
+            // 2. Scan ALL checksummed files, save originals & update mismatches
+            let updatedCount = 0;
+            for (const [relPath, storedHash] of Object.entries(productJson.checksums) as [string, string][]) {
+                const filePath = path.join(this._appOutDir, relPath);
+
+                let actualHash: string;
+                try {
+                    const content = fs.readFileSync(filePath);
+                    actualHash = this._computeHash(content);
+                } catch {
+                    // File not found — skip (don't break other checks)
+                    continue;
+                }
+
+                if (actualHash !== storedHash) {
+                    // Save original hash if we haven't already
+                    if (!(relPath in registry.originalHashes)) {
+                        registry.originalHashes[relPath] = storedHash;
+                        log.debug(`Saved original hash for ${relPath}`);
+                    }
+
+                    productJson.checksums[relPath] = actualHash;
+                    updatedCount++;
+                    log.info(`Updated hash: ${relPath} (${storedHash.substring(0, 8)}... -> ${actualHash.substring(0, 8)}...)`);
+                }
+            }
+
+            // 3. Write registry
             this._writeRegistry(registry);
 
-            // 4. Compute new hash of the patched workbench.html
-            if (!fs.existsSync(this._workbenchHtmlPath)) {
-                log.warn('workbench.html not found — cannot compute hash');
-                return;
+            // 4. Write product.json if anything changed
+            if (updatedCount > 0) {
+                fs.writeFileSync(this._productJsonPath, JSON.stringify(productJson, null, '\t'), 'utf8');
+                log.info(`Updated ${updatedCount} hash(es) in product.json`);
+            } else {
+                log.debug('All hashes already match — no update needed');
             }
-
-            const content = fs.readFileSync(this._workbenchHtmlPath);
-            const newHash = this._computeHash(content);
-
-            // 5. Update product.json if hash differs
-            const currentHash = productJson.checksums[WORKBENCH_HTML_KEY];
-            if (currentHash === newHash) {
-                log.debug('Hash already matches — no update needed');
-                return;
-            }
-
-            productJson.checksums[WORKBENCH_HTML_KEY] = newHash;
-            fs.writeFileSync(this._productJsonPath, JSON.stringify(productJson, null, '\t'), 'utf8');
-            log.info(`Updated product.json hash: ${currentHash} -> ${newHash}`);
         } catch (err) {
             log.error('Failed to suppress integrity check', err);
         }
@@ -134,7 +143,7 @@ export class IntegrityManager {
      * Release the integrity check suppression.
      *
      * Call this when uninstalling the integration. If no other SDK namespaces
-     * remain active, restores the original hash in product.json.
+     * remain active, restores all original hashes in product.json.
      */
     releaseCheck(): void {
         try {
@@ -145,16 +154,16 @@ export class IntegrityManager {
             this._writeRegistry(registry);
 
             if (registry.namespaces.length > 0) {
-                // Other SDK extensions still active — recompute hash for current state
-                log.debug(`${registry.namespaces.length} other namespace(s) still active, recomputing hash`);
-                this._updateProductJsonHash();
+                // Other SDK extensions still active — recompute all hashes
+                log.debug(`${registry.namespaces.length} other namespace(s) still active, recomputing hashes`);
+                this.suppressCheck();
                 return;
             }
 
-            // Last extension uninstalling — restore original hash
-            if (registry.originalHash) {
-                this._restoreOriginalHash(registry.originalHash);
-                log.info(`Restored original hash: ${registry.originalHash}`);
+            // Last extension uninstalling — restore ALL original hashes
+            if (Object.keys(registry.originalHashes).length > 0) {
+                this._restoreOriginalHashes(registry.originalHashes);
+                log.info(`Restored ${Object.keys(registry.originalHashes).length} original hash(es)`);
             }
 
             // Clean up registry file
@@ -167,8 +176,8 @@ export class IntegrityManager {
     /**
      * Re-apply integrity suppression after auto-repair.
      *
-     * Call this after auto-repair has re-patched workbench.html
-     * (e.g. after an AG update that overwrote the file).
+     * Call this after auto-repair has re-patched files
+     * (e.g. after an AG update that overwrote workbench files).
      */
     repair(): void {
         log.info('Repairing integrity check suppression...');
@@ -189,32 +198,20 @@ export class IntegrityManager {
     }
 
     /**
-     * Update product.json with the current workbench.html hash.
+     * Restore all original hashes in product.json.
      */
-    private _updateProductJsonHash(): void {
-        if (!fs.existsSync(this._productJsonPath) || !fs.existsSync(this._workbenchHtmlPath)) {
-            return;
-        }
-
-        const productJson = JSON.parse(fs.readFileSync(this._productJsonPath, 'utf8'));
-        if (!productJson.checksums) return;
-
-        const content = fs.readFileSync(this._workbenchHtmlPath);
-        const newHash = this._computeHash(content);
-        productJson.checksums[WORKBENCH_HTML_KEY] = newHash;
-        fs.writeFileSync(this._productJsonPath, JSON.stringify(productJson, null, '\t'), 'utf8');
-    }
-
-    /**
-     * Restore the original hash in product.json.
-     */
-    private _restoreOriginalHash(originalHash: string): void {
+    private _restoreOriginalHashes(originalHashes: Record<string, string>): void {
         if (!fs.existsSync(this._productJsonPath)) return;
 
         const productJson = JSON.parse(fs.readFileSync(this._productJsonPath, 'utf8'));
         if (!productJson.checksums) return;
 
-        productJson.checksums[WORKBENCH_HTML_KEY] = originalHash;
+        for (const [relPath, hash] of Object.entries(originalHashes)) {
+            if (relPath in productJson.checksums) {
+                productJson.checksums[relPath] = hash;
+            }
+        }
+
         fs.writeFileSync(this._productJsonPath, JSON.stringify(productJson, null, '\t'), 'utf8');
     }
 
@@ -226,15 +223,25 @@ export class IntegrityManager {
             if (fs.existsSync(this._registryPath)) {
                 const raw = fs.readFileSync(this._registryPath, 'utf8');
                 const data = JSON.parse(raw);
+
+                // Migrate from old format (single originalHash) to new (originalHashes map)
+                let originalHashes: Record<string, string> = {};
+                if (data.originalHashes && typeof data.originalHashes === 'object') {
+                    originalHashes = data.originalHashes;
+                } else if (typeof data.originalHash === 'string') {
+                    // Legacy v1.5.0 format: single hash for workbench.html
+                    originalHashes['vs/code/electron-browser/workbench/workbench.html'] = data.originalHash;
+                }
+
                 return {
                     namespaces: Array.isArray(data.namespaces) ? data.namespaces : [],
-                    originalHash: typeof data.originalHash === 'string' ? data.originalHash : null,
+                    originalHashes,
                 };
             }
         } catch {
             // Corrupt or inaccessible — start fresh
         }
-        return { namespaces: [], originalHash: null };
+        return { namespaces: [], originalHashes: {} };
     }
 
     /**
