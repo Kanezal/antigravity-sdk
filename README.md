@@ -6,6 +6,7 @@
 
 [![npm](https://img.shields.io/npm/v/antigravity-sdk)](https://www.npmjs.com/package/antigravity-sdk)
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
+[![Discord](https://img.shields.io/badge/Discord-Join%20Community-5865F2?logo=discord&logoColor=white)](https://discord.gg/M8MAvr8eAM)
 [![Sponsor](https://img.shields.io/badge/Sponsor-Support%20this%20project-ff69b4?logo=githubsponsors&logoColor=white)](https://github.com/Kanezal/antigravity-sdk#support)
 
 *Build powerful extensions that work alongside Antigravity's AI agent.*
@@ -310,6 +311,12 @@ The SDK includes a `SENSITIVE_KEYS` blocklist that prevents extension developers
 - **[GEMINI.md](GEMINI.md)** — Full internal architecture docs, verified DOM selectors, protobuf schemas
 - **[LEGAL.md](LEGAL.md)** — Legal notice, interoperability rights, compliance details
 - **[API Reference](https://kanezal.github.io/antigravity-sdk)** — TypeDoc (coming soon)
+
+---
+
+## Community
+
+Join our **[Discord server](https://discord.gg/M8MAvr8eAM)** to discuss SDK development, share extensions, and get help.
 
 ---
 
