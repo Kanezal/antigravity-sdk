@@ -1,216 +1,344 @@
 /**
- * Workbench Patcher — Install/uninstall integration scripts into workbench.html.
+ * Workbench Patcher — Fabric-style loader for AG SDK extensions.
  *
- * Handles the file-level modification of Antigravity's workbench.html
- * to include/remove custom script tags.
+ * Patches workbench.html ONCE with a shared loader script.
+ * Each extension writes its own script file + heartbeat.
+ * The loader reads a manifest and loads all registered extension scripts.
+ *
+ * Architecture (like Fabric for Minecraft):
+ *
+ *   workbench.html  ←  ONE <script src="./ag-sdk-loader.js">
+ *       │
+ *       ▼
+ *   ag-sdk-loader.js  ←  reads ag-sdk-manifest.json, loads all scripts
+ *       │
+ *       ▼
+ *   ag-sdk-manifest.json  ←  {"extensions":["ns-a","ns-b"]}
+ *       │
+ *       ├── ag-sdk-ns-a.js  +  ag-sdk-ns-a-heartbeat
+ *       └── ag-sdk-ns-b.js  +  ag-sdk-ns-b-heartbeat
  *
  * @module integration/workbench-patcher
- *
  * @internal
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
 
-/** Default prefix for generated files */
-const FILE_PREFIX = 'ag-sdk';
+/** Shared file prefix */
+const PREFIX = 'ag-sdk';
+
+/** Shared HTML markers — ONE block, not per-extension */
+const MARKER_START = '<!-- AG SDK -->';
+const MARKER_END = '<!-- /AG SDK -->';
+
+/** Manifest filename */
+const MANIFEST_FILE = `${PREFIX}-manifest.json`;
+
+/** Loader script filename */
+const LOADER_FILE = `${PREFIX}-loader.js`;
+
+/** Manifest schema */
+interface ISDKManifest {
+    /** Registered extension namespace slugs */
+    extensions: string[];
+}
 
 /**
- * Manages patching/unpatching of Antigravity's workbench.html.
+ * Manages the shared SDK loader in Antigravity's workbench.
+ *
+ * Flow:
+ * 1. First extension: patches workbench.html with loader, writes manifest
+ * 2. Next extensions: just add themselves to manifest + write their script
+ * 3. Last extension uninstalling: removes loader from workbench.html
  */
 export class WorkbenchPatcher {
     private readonly _workbenchDir: string;
     private readonly _workbenchHtml: string;
+    private readonly _manifestPath: string;
+    private readonly _loaderPath: string;
     private readonly _scriptPath: string;
     private readonly _heartbeatPath: string;
     private readonly _slug: string;
 
-    private readonly _markerStart: string;
-    private readonly _markerEnd: string;
-
     /**
      * @param namespace - Unique slug for this extension (e.g. 'kanezal-better-antigravity').
-     *   Used to namespace all generated files and HTML markers so multiple
-     *   SDK-based extensions can coexist without conflicts.
      */
     constructor(namespace: string = 'default') {
-        // Resolve Antigravity install path
         const appData = process.env.LOCALAPPDATA || '';
         this._workbenchDir = path.join(
             appData,
-            'Programs',
-            'Antigravity',
-            'resources',
-            'app',
-            'out',
-            'vs',
-            'code',
-            'electron-browser',
-            'workbench',
+            'Programs', 'Antigravity', 'resources', 'app',
+            'out', 'vs', 'code', 'electron-browser', 'workbench',
         );
         this._workbenchHtml = path.join(this._workbenchDir, 'workbench.html');
+        this._manifestPath = path.join(this._workbenchDir, MANIFEST_FILE);
+        this._loaderPath = path.join(this._workbenchDir, LOADER_FILE);
 
         this._slug = namespace.replace(/[^a-zA-Z0-9-]/g, '-');
-        this._scriptPath = path.join(this._workbenchDir, `${FILE_PREFIX}-${this._slug}.js`);
-        this._heartbeatPath = path.join(this._workbenchDir, `${FILE_PREFIX}-${this._slug}-heartbeat`);
-        this._markerStart = `<!-- AG SDK [${this._slug}] -->`;
-        this._markerEnd = `<!-- /AG SDK [${this._slug}] -->`;
+        this._scriptPath = path.join(this._workbenchDir, `${PREFIX}-${this._slug}.js`);
+        this._heartbeatPath = path.join(this._workbenchDir, `${PREFIX}-${this._slug}-heartbeat`);
     }
 
-    /**
-     * Check if workbench.html exists and is accessible.
-     */
+    // ─── Queries ──────────────────────────────────────────────────────
+
+    /** Check if workbench.html exists and is accessible. */
     isAvailable(): boolean {
         return fs.existsSync(this._workbenchHtml);
     }
 
-    /**
-     * Check if our integration is currently installed.
-     */
-    isInstalled(): boolean {
+    /** Check if the shared SDK loader is installed in workbench.html. */
+    isLoaderInstalled(): boolean {
         if (!this.isAvailable()) return false;
         try {
-            const content = fs.readFileSync(this._workbenchHtml, 'utf8');
-            return content.includes(this._markerStart);
+            return fs.readFileSync(this._workbenchHtml, 'utf8').includes(MARKER_START);
         } catch {
             return false;
         }
     }
 
+    /** Check if THIS extension is registered in the manifest. */
+    isInstalled(): boolean {
+        const manifest = this._readManifest();
+        return manifest.extensions.includes(this._slug);
+    }
+
+    /** Get all registered extension namespaces from manifest. */
+    getRegisteredExtensions(): string[] {
+        return this._readManifest().extensions;
+    }
+
+    // ─── Install ──────────────────────────────────────────────────────
+
     /**
-     * Install the integration script.
+     * Install this extension's script into the SDK framework.
      *
-     * 1. Writes the script file to the workbench directory
-     * 2. Patches workbench.html to include a <script> tag
+     * - If loader is not in workbench.html → patch HTML (first extension)
+     * - Writes/updates this extension's script file
+     * - Registers in manifest
+     * - Updates the loader script
      *
-     * @param scriptContent — The generated JavaScript code
+     * @param scriptContent — Generated JS for this extension
      */
     install(scriptContent: string): void {
         if (!this.isAvailable()) {
             throw new Error(`Workbench not found at: ${this._workbenchDir}`);
         }
 
-        // First uninstall any previous integration for THIS namespace
-        if (this.isInstalled()) {
-            this.uninstall();
+        // Clean up legacy per-namespace HTML blocks + old files
+        this._cleanupLegacy();
+
+        // 1. Patch workbench.html with loader (only if not already there)
+        if (!this.isLoaderInstalled()) {
+            this._patchHtml();
         }
 
-        // Clean up legacy files from previous versions (non-namespaced)
-        this._cleanupLegacyFiles();
-
-        // Write the script file
+        // 2. Write this extension's script file
         fs.writeFileSync(this._scriptPath, scriptContent, 'utf8');
 
-        // Patch workbench.html
-        let html = fs.readFileSync(this._workbenchHtml, 'utf8');
+        // 3. Register in manifest
+        const manifest = this._readManifest();
+        if (!manifest.extensions.includes(this._slug)) {
+            manifest.extensions.push(this._slug);
+        }
+        this._writeManifest(manifest);
 
-        // Insert before </html>
-        const scriptBasename = path.basename(this._scriptPath);
-        const scriptTag = [
-            this._markerStart,
-            `<script src="./${scriptBasename}"></script>`,
-            this._markerEnd,
-        ].join('\n');
+        // 4. Regenerate the loader (reads manifest, loads all scripts)
+        this._writeLoader();
 
-        html = html.replace('</html>', `${scriptTag}\n</html>`);
-        fs.writeFileSync(this._workbenchHtml, html, 'utf8');
-
-        // Create empty titles JSON if it doesn't exist (prevents console 404)
-        const titlesPath = path.join(this._workbenchDir, `ag-sdk-titles-${this._slug}.json`);
+        // 5. Create empty titles JSON (prevents console 404)
+        const titlesPath = path.join(this._workbenchDir, `${PREFIX}-titles-${this._slug}.json`);
         if (!fs.existsSync(titlesPath)) {
             fs.writeFileSync(titlesPath, '{}', 'utf8');
         }
     }
 
+    // ─── Uninstall ────────────────────────────────────────────────────
+
     /**
-     * Remove the integration.
+     * Uninstall this extension from the SDK framework.
      *
-     * 1. Removes the <script> tag from workbench.html
-     * 2. Deletes the script file
+     * - Removes from manifest
+     * - Deletes this extension's script + heartbeat + titles
+     * - If last extension → removes loader from workbench.html + cleans up
      */
     uninstall(): void {
         if (!this.isAvailable()) return;
 
-        // Remove from workbench.html
+        // 1. Remove from manifest
+        const manifest = this._readManifest();
+        manifest.extensions = manifest.extensions.filter(ns => ns !== this._slug);
+
+        // 2. Delete this extension's files
+        this._tryDelete(this._scriptPath);
+        this._tryDelete(this._heartbeatPath);
+        this._tryDelete(path.join(this._workbenchDir, `${PREFIX}-titles-${this._slug}.json`));
+
+        if (manifest.extensions.length === 0) {
+            // Last extension — full cleanup
+            this._unpatchHtml();
+            this._tryDelete(this._loaderPath);
+            this._tryDelete(this._manifestPath);
+        } else {
+            // Others remain — update manifest and regenerate loader
+            this._writeManifest(manifest);
+            this._writeLoader();
+        }
+    }
+
+    // ─── Heartbeat ────────────────────────────────────────────────────
+
+    /** Write/refresh heartbeat marker. */
+    writeHeartbeat(): void {
+        try {
+            fs.writeFileSync(this._heartbeatPath, Date.now().toString(), 'utf8');
+        } catch { /* workbench dir may not be writable */ }
+    }
+
+    /** Remove heartbeat marker. */
+    removeHeartbeat(): void {
+        this._tryDelete(this._heartbeatPath);
+    }
+
+    // ─── Accessors ────────────────────────────────────────────────────
+
+    getWorkbenchDir(): string { return this._workbenchDir; }
+    getScriptPath(): string { return this._scriptPath; }
+    getHeartbeatPath(): string { return this._heartbeatPath; }
+
+    // ─── Private: HTML patching ───────────────────────────────────────
+
+    /** Add the shared loader <script> to workbench.html (ONE time). */
+    private _patchHtml(): void {
+        let html = fs.readFileSync(this._workbenchHtml, 'utf8');
+
+        const loaderTag = [
+            MARKER_START,
+            `<script src="./${LOADER_FILE}"></script>`,
+            MARKER_END,
+        ].join('\n');
+
+        html = html.replace('</html>', `${loaderTag}\n</html>`);
+        fs.writeFileSync(this._workbenchHtml, html, 'utf8');
+    }
+
+    /** Remove the shared loader <script> from workbench.html. */
+    private _unpatchHtml(): void {
         try {
             let html = fs.readFileSync(this._workbenchHtml, 'utf8');
             const regex = new RegExp(
-                `\\n?${escapeRegex(this._markerStart)}[\\s\\S]*?${escapeRegex(this._markerEnd)}\\n?`,
+                `\\n?${escapeRegex(MARKER_START)}[\\s\\S]*?${escapeRegex(MARKER_END)}\\n?`,
                 'g',
             );
             html = html.replace(regex, '');
             fs.writeFileSync(this._workbenchHtml, html, 'utf8');
-        } catch {
-            // Ignore errors during cleanup
-        }
+        } catch { /* ignore */ }
+    }
 
-        // Remove script file
+    // ─── Private: Manifest ────────────────────────────────────────────
+
+    private _readManifest(): ISDKManifest {
         try {
-            if (fs.existsSync(this._scriptPath)) {
-                fs.unlinkSync(this._scriptPath);
+            if (fs.existsSync(this._manifestPath)) {
+                const data = JSON.parse(fs.readFileSync(this._manifestPath, 'utf8'));
+                return { extensions: Array.isArray(data.extensions) ? data.extensions : [] };
             }
-        } catch {
-            // Ignore
-        }
+        } catch { /* corrupt */ }
+        return { extensions: [] };
     }
 
+    private _writeManifest(manifest: ISDKManifest): void {
+        fs.writeFileSync(this._manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
+    }
+
+    // ─── Private: Loader ──────────────────────────────────────────────
+
     /**
-     * Write/refresh the heartbeat marker file.
+     * Generate and write the shared loader script.
      *
-     * The generated script checks this file's modification time
-     * to determine if the extension is still active. If the file
-     * is missing or stale, the script will not start.
+     * The loader runs in the renderer. On startup it:
+     * 1. Fetches the manifest to get the list of extensions
+     * 2. For each extension, checks its heartbeat (skip if stale >48h)
+     * 3. Creates <script> tags to load each active extension's script
      */
-    writeHeartbeat(): void {
-        try {
-            fs.writeFileSync(this._heartbeatPath, Date.now().toString(), 'utf8');
-        } catch {
-            // Ignore — workbench dir may not be writable
+    private _writeLoader(): void {
+        const manifest = this._readManifest();
+
+        // Build a static list of scripts to load (known at install time)
+        // The loader still checks heartbeats at runtime for liveness
+        const scriptEntries = manifest.extensions.map(ns => ({
+            ns,
+            script: `${PREFIX}-${ns}.js`,
+            heartbeat: `${PREFIX}-${ns}-heartbeat`,
+        }));
+
+        const loaderCode = `(function agSDKLoader() {
+'use strict';
+if (window.__agSDKLoader) return;
+window.__agSDKLoader = true;
+
+var MAX_AGE = 172800000; // 48h
+var entries = ${JSON.stringify(scriptEntries)};
+
+function checkHeartbeat(hbFile, callback) {
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', './' + hbFile + '?t=' + Date.now(), true);
+    xhr.onload = function() {
+        if (xhr.status === 200) {
+            var ts = parseInt(xhr.responseText, 10);
+            callback(!isNaN(ts) && (Date.now() - ts) < MAX_AGE);
+        } else {
+            callback(false);
         }
+    };
+    xhr.onerror = function() { callback(false); };
+    xhr.send();
+}
+
+function loadScript(src) {
+    var s = document.createElement('script');
+    s.src = './' + src;
+    s.async = false;
+    document.head.appendChild(s);
+}
+
+entries.forEach(function(entry) {
+    checkHeartbeat(entry.heartbeat, function(alive) {
+        if (alive) {
+            loadScript(entry.script);
+            console.log('[AG-SDK] Loaded: ' + entry.ns);
+        } else {
+            console.log('[AG-SDK] Skipped (stale heartbeat): ' + entry.ns);
+        }
+    });
+});
+
+console.log('[AG-SDK] Loader initialized (' + entries.length + ' extension(s))');
+})();`;
+
+        fs.writeFileSync(this._loaderPath, loaderCode, 'utf8');
     }
 
+    // ─── Private: Cleanup ─────────────────────────────────────────────
+
     /**
-     * Remove the heartbeat marker file.
+     * Clean up legacy per-namespace HTML blocks and old files
+     * from previous SDK versions that used per-extension HTML patching.
      */
-    removeHeartbeat(): void {
+    private _cleanupLegacy(): void {
+        // Remove old per-namespace HTML blocks: <!-- AG SDK [ns] --> ... <!-- /AG SDK [ns] -->
         try {
-            if (fs.existsSync(this._heartbeatPath)) {
-                fs.unlinkSync(this._heartbeatPath);
+            const html = fs.readFileSync(this._workbenchHtml, 'utf8');
+            const cleaned = html.replace(
+                /\n?<!-- AG SDK \[[^\]]+\] -->[\s\S]*?<!-- \/AG SDK \[[^\]]+\] -->\n?/g,
+                '',
+            );
+            if (cleaned !== html) {
+                fs.writeFileSync(this._workbenchHtml, cleaned, 'utf8');
             }
-        } catch {
-            // Ignore
-        }
-    }
+        } catch { /* ignore */ }
 
-    /**
-     * Get the path to the heartbeat file.
-     */
-    getHeartbeatPath(): string {
-        return this._heartbeatPath;
-    }
-
-    /**
-     * Get the path to the workbench directory.
-     */
-    getWorkbenchDir(): string {
-        return this._workbenchDir;
-    }
-
-    /**
-     * Get the path to the script file.
-     */
-    getScriptPath(): string {
-        return this._scriptPath;
-    }
-
-    /**
-     * Clean up legacy files from previous SDK versions.
-     *
-     * Removes non-namespaced files (from before namespace support)
-     * and files with wrong namespace (e.g. 'undefined').
-     */
-    private _cleanupLegacyFiles(): void {
-        // Legacy file names that may exist from older versions
+        // Remove legacy non-namespaced files
         const legacyFiles = [
             'ag-sdk-integrate.js',
             'ag-sdk-heartbeat',
@@ -218,36 +346,25 @@ export class WorkbenchPatcher {
             'ag-sdk-titles-undefined.json',
             'ag-sdk-titles-default.json',
         ];
-
         for (const name of legacyFiles) {
-            const p = path.join(this._workbenchDir, name);
-            try {
-                if (fs.existsSync(p)) fs.unlinkSync(p);
-            } catch { /* ignore */ }
+            this._tryDelete(path.join(this._workbenchDir, name));
         }
 
-        // Remove legacy script tags from workbench.html
+        // Remove old X-Ray SDK markers
         try {
-            let html = fs.readFileSync(this._workbenchHtml, 'utf8');
-            let changed = false;
-
-            // Remove bare <script src="./ag-sdk-integrate.js"></script> lines
-            const legacyTagRegex = /<script src="\.\/ag-sdk-integrate\.js"><\/script>\n?/g;
-            if (legacyTagRegex.test(html)) {
-                html = html.replace(legacyTagRegex, '');
-                changed = true;
+            const html = fs.readFileSync(this._workbenchHtml, 'utf8');
+            const cleaned = html
+                .replace(/<script src="\.\/ag-sdk-integrate\.js"><\/script>\n?/g, '')
+                .replace(/<!-- X-Ray SDK Integration -->\n?<script[^>]*ag-sdk-integrate[^>]*><\/script>\n?<!-- \/X-Ray SDK Integration -->\n?/g, '');
+            if (cleaned !== html) {
+                fs.writeFileSync(this._workbenchHtml, cleaned, 'utf8');
             }
+        } catch { /* ignore */ }
+    }
 
-            // Remove old X-Ray SDK markers with no namespace
-            const xrayRegex = /<!-- X-Ray SDK Integration -->\n?<script[^>]*ag-sdk-integrate[^>]*><\/script>\n?<!-- \/X-Ray SDK Integration -->\n?/g;
-            if (xrayRegex.test(html)) {
-                html = html.replace(xrayRegex, '');
-                changed = true;
-            }
-
-            if (changed) {
-                fs.writeFileSync(this._workbenchHtml, html, 'utf8');
-            }
+    private _tryDelete(filePath: string): void {
+        try {
+            if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
         } catch { /* ignore */ }
     }
 }

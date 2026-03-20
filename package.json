@@ -33,6 +33,7 @@
     "engines": {
         "node": ">=16.0.0"
     },
+    "antigravityVersions": ">=1.107.0",
     "peerDependencies": {
         "@types/vscode": "^1.85.0"
     },

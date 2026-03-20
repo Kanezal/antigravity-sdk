@@ -104,6 +104,7 @@ export class CascadeManager implements IDisposable {
      * Get agent preferences (all 16 sentinel values).
      */
     async getPreferences(): Promise<IAgentPreferences> {
+        log.debug('getPreferences: delegating to StateBridge');
         return this._state.getAgentPreferences();
     }
 
@@ -120,13 +121,16 @@ export class CascadeManager implements IDisposable {
      * @returns Parsed diagnostics information
      */
     async getDiagnostics(): Promise<IDiagnosticsInfo> {
+        log.debug('getDiagnostics: executing antigravity.getDiagnostics');
         const raw = await this._commands.execute<string>(AntigravityCommands.GET_DIAGNOSTICS);
 
         if (!raw || typeof raw !== 'string') {
             throw new Error('getDiagnostics returned unexpected type');
         }
 
+        log.debug(`getDiagnostics: raw length=${raw.length} bytes, parsing`);
         const parsed = JSON.parse(raw);
+        log.debug(`getDiagnostics: user=${parsed.systemInfo?.userName}, trajectories=${parsed.recentTrajectories?.length ?? 0}`);
 
         return {
             isRemote: parsed.isRemote ?? false,

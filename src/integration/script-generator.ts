@@ -13,17 +13,17 @@
 
 import { Selectors, AG_PREFIX, AG_DATA_ATTR } from './selectors';
 import {
-    IntegrationConfig,
-    IntegrationPoint,
-    IToastConfig,
-    IToastRow,
-    TurnMetric,
-    IButtonIntegration,
-    ITurnMetaIntegration,
-    IUserBadgeIntegration,
-    IBotActionIntegration,
-    IDropdownIntegration,
-    ITitleIntegration,
+  IntegrationConfig,
+  IntegrationPoint,
+  IToastConfig,
+  IToastRow,
+  TurnMetric,
+  IButtonIntegration,
+  ITurnMetaIntegration,
+  IUserBadgeIntegration,
+  IBotActionIntegration,
+  IDropdownIntegration,
+  ITitleIntegration,
 } from './types';
 
 /**
@@ -31,50 +31,51 @@ import {
  * from an array of IntegrationConfig objects.
  */
 export class ScriptGenerator {
-    /**
-     * Generate the complete integration script.
-     *
-     * @param configs — Registered integration configurations
-     * @returns — Complete JS code as a string
-     */
-    generate(configs: IntegrationConfig[]): string {
-        const parts: string[] = [];
+  /**
+   * Generate the complete integration script.
+   *
+   * @param configs — Registered integration configurations
+   * @param namespace — Optional namespace slug for file naming (used for heartbeat URL)
+   * @returns — Complete JS code as a string
+   */
+  generate(configs: IntegrationConfig[], namespace?: string): string {
+    const parts: string[] = [];
 
-        parts.push(this._header());
-        parts.push(this._css(configs));
-        parts.push(this._helpers());
-        parts.push(this._toast());
-        parts.push(this._stats());
+    parts.push(this._header());
+    parts.push(this._css(configs));
+    parts.push(this._helpers());
+    parts.push(this._toast());
+    parts.push(this._stats());
 
-        // Generate code for each integration point
-        const grouped = this._groupByPoint(configs);
+    // Generate code for each integration point
+    const grouped = this._groupByPoint(configs);
 
-        for (const [point, cfgs] of Object.entries(grouped)) {
-            parts.push(this._generatePoint(point as IntegrationPoint, cfgs));
-        }
-
-        parts.push(this._mainLoop(Object.keys(grouped) as IntegrationPoint[]));
-        parts.push(this._footer());
-
-        return parts.join('\n');
+    for (const [point, cfgs] of Object.entries(grouped)) {
+      parts.push(this._generatePoint(point as IntegrationPoint, cfgs));
     }
 
-    // ─── Grouping ──────────────────────────────────────────────────────
+    parts.push(this._mainLoop(Object.keys(grouped) as IntegrationPoint[]));
+    parts.push(this._footer(namespace));
 
-    private _groupByPoint(configs: IntegrationConfig[]): Record<string, IntegrationConfig[]> {
-        const groups: Record<string, IntegrationConfig[]> = {};
-        for (const c of configs) {
-            if (c.enabled === false) continue;
-            if (!groups[c.point]) groups[c.point] = [];
-            groups[c.point].push(c);
-        }
-        return groups;
+    return parts.join('\n');
+  }
+
+  // ─── Grouping ──────────────────────────────────────────────────────
+
+  private _groupByPoint(configs: IntegrationConfig[]): Record<string, IntegrationConfig[]> {
+    const groups: Record<string, IntegrationConfig[]> = {};
+    for (const c of configs) {
+      if (c.enabled === false) continue;
+      if (!groups[c.point]) groups[c.point] = [];
+      groups[c.point].push(c);
     }
+    return groups;
+  }
 
-    // ─── Code Sections ────────────────────────────────────────────────
+  // ─── Code Sections ────────────────────────────────────────────────
 
-    private _header(): string {
-        return `(function agSDK(){
+  private _header(): string {
+    return `(function agSDK(){
 'use strict';
 if(window.__agSDK)return;
 window.__agSDK=true;
@@ -101,20 +102,21 @@ var _theme={
 // Watch for theme changes (VS Code toggles body classes)
 new MutationObserver(function(){var newDark=document.body.classList.contains('vscode-dark');if(newDark!==_isDark){location.reload();}}).observe(document.body,{attributes:true,attributeFilter:['class']});
 `;
-    }
+  }
 
-    private _footer(): string {
-        // The heartbeat file is in the same directory as the script.
-        // We use sync XHR (allowed in renderer since we're in a script tag,
-        // not a module) to check the file before starting.
-        // Max age: 48 hours (172800000ms) — enough to survive normal restarts
-        // but catches disabled extensions reliably.
-        return `
+  private _footer(namespace?: string): string {
+    // The heartbeat file is in the same directory as the script.
+    // We use sync XHR (allowed in renderer since we're in a script tag,
+    // not a module) to check the file before starting.
+    // Max age: 48 hours (172800000ms) — enough to survive normal restarts
+    // but catches disabled extensions reliably.
+    const heartbeatFile = namespace ? `ag-sdk-${namespace}-heartbeat` : 'ag-sdk-heartbeat';
+    return `
 var _heartbeatMaxAge=172800000;
 function checkHeartbeat(){
   try{
     var xhr=new XMLHttpRequest();
-    xhr.open('GET','./ag-sdk-heartbeat?t='+Date.now(),false);
+    xhr.open('GET','./${heartbeatFile}?t='+Date.now(),false);
     xhr.send();
     if(xhr.status!==200)return false;
     var ts=parseInt(xhr.responseText,10);
@@ -132,15 +134,15 @@ function boot(){
 }
 boot();
 })();`;
-    }
+  }
 
-    private _css(configs: IntegrationConfig[]): string {
-        // Only include CSS for points that are actually used
-        const points = new Set(configs.map(c => c.point));
+  private _css(configs: IntegrationConfig[]): string {
+    // Only include CSS for points that are actually used
+    const points = new Set(configs.map(c => c.point));
 
-        // All colors now use _theme variables for light/dark mode support
-        // CSS is generated as a JS template that reads _theme at runtime
-        return `
+    // All colors now use _theme variables for light/dark mode support
+    // CSS is generated as a JS template that reads _theme at runtime
+    return `
 // ─── Theme-Aware CSS ───
 var _cssRules=[
   '.${AG_PREFIX}meta{padding:3px 8px;background:'+_theme.metaBg+';border-top:1px solid '+_theme.border+';font-family:"Cascadia Code","Fira Code",monospace;font-size:9px;color:'+_theme.fgDim+';display:flex;align-items:center;gap:5px;flex-wrap:wrap;transition:all .2s;cursor:default;user-select:none;margin-top:2px;border-radius:0 0 6px 6px}',
@@ -179,17 +181,17 @@ var css=document.createElement('style');
 css.textContent=_cssRules.join('\\n');
 document.head.appendChild(css);
 `;
-    }
+  }
 
-    private _helpers(): string {
-        return `
+  private _helpers(): string {
+    return `
 function mk(tag,cls,txt){var e=document.createElement(tag);if(cls)e.className=cls;if(txt!==undefined)e.textContent=txt;return e;}
 function fmt(n){return n>=1000?(n/1000).toFixed(1)+'k':''+n;}
 `;
-    }
+  }
 
-    private _toast(): string {
-        return `
+  private _toast(): string {
+    return `
 var _toastT=0;
 function toast(title,badge,rows){
   var old=document.querySelector('.${AG_PREFIX}toast');if(old)old.remove();
@@ -204,10 +206,10 @@ function toast(title,badge,rows){
   t.addEventListener('click',function(){t.remove();});
 }
 `;
-    }
+  }
 
-    private _stats(): string {
-        return `
+  private _stats(): string {
+    return `
 function getStats(){
   var c=document.querySelector(${JSON.stringify(Selectors.TURNS_CONTAINER)});
   if(!c)return null;
@@ -222,62 +224,62 @@ function getStats(){
   return{turns:turns,u:uC,b:bC,code:code};
 }
 `;
+  }
+
+  // ─── Point generators ─────────────────────────────────────────────
+
+  private _generatePoint(point: IntegrationPoint, configs: IntegrationConfig[]): string {
+    switch (point) {
+      case IntegrationPoint.TOP_BAR:
+        return this._genTopBar(configs as IButtonIntegration[]);
+      case IntegrationPoint.TOP_RIGHT:
+        return this._genTopRight(configs as IButtonIntegration[]);
+      case IntegrationPoint.INPUT_AREA:
+        return this._genInputArea(configs as IButtonIntegration[]);
+      case IntegrationPoint.BOTTOM_ICONS:
+        return this._genBottomIcons(configs as IButtonIntegration[]);
+      case IntegrationPoint.TURN_METADATA:
+        return this._genTurnMeta(configs as ITurnMetaIntegration[]);
+      case IntegrationPoint.USER_BADGE:
+        return this._genUserBadge(configs as IUserBadgeIntegration[]);
+      case IntegrationPoint.BOT_ACTION:
+        return this._genBotAction(configs as IBotActionIntegration[]);
+      case IntegrationPoint.DROPDOWN_MENU:
+        return this._genDropdown(configs as IDropdownIntegration[]);
+      case IntegrationPoint.CHAT_TITLE:
+        return this._genTitle(configs as ITitleIntegration[]);
+      default:
+        return `// Unknown point: ${point}`;
     }
+  }
 
-    // ─── Point generators ─────────────────────────────────────────────
-
-    private _generatePoint(point: IntegrationPoint, configs: IntegrationConfig[]): string {
-        switch (point) {
-            case IntegrationPoint.TOP_BAR:
-                return this._genTopBar(configs as IButtonIntegration[]);
-            case IntegrationPoint.TOP_RIGHT:
-                return this._genTopRight(configs as IButtonIntegration[]);
-            case IntegrationPoint.INPUT_AREA:
-                return this._genInputArea(configs as IButtonIntegration[]);
-            case IntegrationPoint.BOTTOM_ICONS:
-                return this._genBottomIcons(configs as IButtonIntegration[]);
-            case IntegrationPoint.TURN_METADATA:
-                return this._genTurnMeta(configs as ITurnMetaIntegration[]);
-            case IntegrationPoint.USER_BADGE:
-                return this._genUserBadge(configs as IUserBadgeIntegration[]);
-            case IntegrationPoint.BOT_ACTION:
-                return this._genBotAction(configs as IBotActionIntegration[]);
-            case IntegrationPoint.DROPDOWN_MENU:
-                return this._genDropdown(configs as IDropdownIntegration[]);
-            case IntegrationPoint.CHAT_TITLE:
-                return this._genTitle(configs as ITitleIntegration[]);
-            default:
-                return `// Unknown point: ${point}`;
+  private _genToastCall(toast?: IToastConfig): string {
+    if (!toast) return '';
+    const badge = toast.badge
+      ? `[${JSON.stringify(toast.badge.text)},${JSON.stringify(toast.badge.bgColor)},${JSON.stringify(toast.badge.textColor)}]`
+      : 'null';
+    const rows = toast.rows
+      .map(r => {
+        if (r.dynamic) {
+          return `[${JSON.stringify(r.key)},${r.value}]`;
         }
-    }
+        return `[${JSON.stringify(r.key)},${JSON.stringify(r.value)}]`;
+      })
+      .join(',');
+    return `toast(${JSON.stringify(toast.title)},${badge},[${rows}]);`;
+  }
 
-    private _genToastCall(toast?: IToastConfig): string {
-        if (!toast) return '';
-        const badge = toast.badge
-            ? `[${JSON.stringify(toast.badge.text)},${JSON.stringify(toast.badge.bgColor)},${JSON.stringify(toast.badge.textColor)}]`
-            : 'null';
-        const rows = toast.rows
-            .map(r => {
-                if (r.dynamic) {
-                    return `[${JSON.stringify(r.key)},${r.value}]`;
-                }
-                return `[${JSON.stringify(r.key)},${JSON.stringify(r.value)}]`;
-            })
-            .join(',');
-        return `toast(${JSON.stringify(toast.title)},${badge},[${rows}]);`;
-    }
-
-    private _genTopBar(configs: IButtonIntegration[]): string {
-        const buttons = configs.map(c => {
-            const toastCall = this._genToastCall(c.toast);
-            return `  var btn_${c.id}=mk('a','${AG_PREFIX}hdr ${AG_PREFIX}${c.id}');
+  private _genTopBar(configs: IButtonIntegration[]): string {
+    const buttons = configs.map(c => {
+      const toastCall = this._genToastCall(c.toast);
+      return `  var btn_${c.id}=mk('a','${AG_PREFIX}hdr ${AG_PREFIX}${c.id}');
   btn_${c.id}.textContent=${JSON.stringify(c.icon)};
   btn_${c.id}.title=${JSON.stringify(c.tooltip || '')};
   btn_${c.id}.addEventListener('click',function(){${toastCall}});
   iconsArea.insertBefore(btn_${c.id},iconsArea.children[1]);`;
-        });
+    });
 
-        return `
+    return `
 function integrateTopBar(){
   var p=document.querySelector(${JSON.stringify(Selectors.PANEL)});if(!p)return;
   var topBar=p.querySelector(${JSON.stringify(Selectors.TOP_BAR)});if(!topBar)return;
@@ -286,19 +288,19 @@ function integrateTopBar(){
 ${buttons.join('\n')}
 }
 `;
-    }
+  }
 
-    private _genTopRight(configs: IButtonIntegration[]): string {
-        const buttons = configs.map(c => {
-            const toastCall = this._genToastCall(c.toast);
-            return `  var btn_${c.id}=mk('a','${AG_PREFIX}hdr ${AG_PREFIX}${c.id}');
+  private _genTopRight(configs: IButtonIntegration[]): string {
+    const buttons = configs.map(c => {
+      const toastCall = this._genToastCall(c.toast);
+      return `  var btn_${c.id}=mk('a','${AG_PREFIX}hdr ${AG_PREFIX}${c.id}');
   btn_${c.id}.textContent=${JSON.stringify(c.icon)};
   btn_${c.id}.title=${JSON.stringify(c.tooltip || '')};
   btn_${c.id}.addEventListener('click',function(){${toastCall}});
   iconsArea.insertBefore(btn_${c.id},iconsArea.lastElementChild);`;
-        });
+    });
 
-        return `
+    return `
 function integrateTopRight(){
   var p=document.querySelector(${JSON.stringify(Selectors.PANEL)});if(!p)return;
   var topBar=p.querySelector(${JSON.stringify(Selectors.TOP_BAR)});if(!topBar)return;
@@ -307,19 +309,19 @@ function integrateTopRight(){
 ${buttons.join('\n')}
 }
 `;
-    }
+  }
 
-    private _genInputArea(configs: IButtonIntegration[]): string {
-        const buttons = configs.map(c => {
-            const toastCall = this._genToastCall(c.toast);
-            return `  var btn=mk('div','${AG_PREFIX}inp ${AG_PREFIX}${c.id}');
+  private _genInputArea(configs: IButtonIntegration[]): string {
+    const buttons = configs.map(c => {
+      const toastCall = this._genToastCall(c.toast);
+      return `  var btn=mk('div','${AG_PREFIX}inp ${AG_PREFIX}${c.id}');
   btn.textContent=${JSON.stringify(c.icon)};
   btn.title=${JSON.stringify(c.tooltip || '')};
   btn.addEventListener('click',function(){${toastCall}});
   btnRow.insertBefore(btn,btnRow.firstChild);`;
-        });
+    });
 
-        return `
+    return `
 function integrateInputArea(){
   var ib=document.querySelector(${JSON.stringify(Selectors.INPUT_BOX)});
   if(!ib||ib.querySelector('.${AG_PREFIX}${configs[0].id}'))return;
@@ -329,19 +331,19 @@ function integrateInputArea(){
 ${buttons.join('\n')}
 }
 `;
-    }
+  }
 
-    private _genBottomIcons(configs: IButtonIntegration[]): string {
-        const buttons = configs.map(c => {
-            const toastCall = this._genToastCall(c.toast);
-            return `  var btn=mk('div','${AG_PREFIX}inp ${AG_PREFIX}${c.id}');
+  private _genBottomIcons(configs: IButtonIntegration[]): string {
+    const buttons = configs.map(c => {
+      const toastCall = this._genToastCall(c.toast);
+      return `  var btn=mk('div','${AG_PREFIX}inp ${AG_PREFIX}${c.id}');
   btn.textContent=${JSON.stringify(c.icon)};
   btn.title=${JSON.stringify(c.tooltip || '')};
   btn.addEventListener('click',function(){${toastCall}});
   row.appendChild(btn);`;
-        });
+    });
 
-        return `
+    return `
 function integrateBottomIcons(){
   var ib=document.querySelector(${JSON.stringify(Selectors.INPUT_BOX)});
   if(!ib||ib.querySelector('.${AG_PREFIX}${configs[0].id}'))return;
@@ -352,44 +354,44 @@ function integrateBottomIcons(){
 ${buttons.join('\n')}
 }
 `;
+  }
+
+  private _genTurnMeta(configs: ITurnMetaIntegration[]): string {
+    // Take first config for metrics (single turn metadata style)
+    const cfg = configs[0];
+    const metricParts: string[] = [];
+
+    for (const m of cfg.metrics) {
+      switch (m) {
+        case 'turnNumber':
+          metricParts.push(`meta.appendChild(mk('span','${AG_PREFIX}t ${AG_PREFIX}b','T'+tI));`);
+          break;
+        case 'userCharCount':
+          metricParts.push(`if(uL>0){meta.appendChild(mk('span','${AG_PREFIX}t ${AG_PREFIX}u','USER'));meta.appendChild(mk('span','${AG_PREFIX}k',fmt(uL)));}`);
+          break;
+        case 'separator':
+          metricParts.push(`if(uL>0&&bL>0)meta.appendChild(mk('span','${AG_PREFIX}s','\\u2502'));`);
+          break;
+        case 'aiCharCount':
+          metricParts.push(`if(bL>0){meta.appendChild(mk('span','${AG_PREFIX}t ${AG_PREFIX}b','AI'));meta.appendChild(mk('span','${AG_PREFIX}k',fmt(bL)));}`);
+          break;
+        case 'codeBlocks':
+          metricParts.push(`if(codes>0){meta.appendChild(mk('span','${AG_PREFIX}k','code:'));meta.appendChild(mk('span','${AG_PREFIX}v ${AG_PREFIX}w',''+codes));}`);
+          break;
+        case 'thinkingIndicator':
+          metricParts.push(`if(brain)meta.appendChild(mk('span','${AG_PREFIX}v','\\u{1F9E0}'));`);
+          break;
+        case 'ratio':
+          metricParts.push(`if(uL>0&&bL>0){meta.appendChild(mk('span','${AG_PREFIX}k',(bL/uL).toFixed(1)+'x'));}`);
+          break;
+      }
     }
 
-    private _genTurnMeta(configs: ITurnMetaIntegration[]): string {
-        // Take first config for metrics (single turn metadata style)
-        const cfg = configs[0];
-        const metricParts: string[] = [];
+    const clickHandler = cfg.clickable !== false
+      ? `meta.addEventListener('click',function(){toast('Turn '+tI,null,[['user:',fmt(uL)],['AI:',fmt(bL)],['ratio:',uL>0?(bL/uL).toFixed(1)+'x':'\\u2014']]);});`
+      : '';
 
-        for (const m of cfg.metrics) {
-            switch (m) {
-                case 'turnNumber':
-                    metricParts.push(`meta.appendChild(mk('span','${AG_PREFIX}t ${AG_PREFIX}b','T'+tI));`);
-                    break;
-                case 'userCharCount':
-                    metricParts.push(`if(uL>0){meta.appendChild(mk('span','${AG_PREFIX}t ${AG_PREFIX}u','USER'));meta.appendChild(mk('span','${AG_PREFIX}k',fmt(uL)));}`);
-                    break;
-                case 'separator':
-                    metricParts.push(`if(uL>0&&bL>0)meta.appendChild(mk('span','${AG_PREFIX}s','\\u2502'));`);
-                    break;
-                case 'aiCharCount':
-                    metricParts.push(`if(bL>0){meta.appendChild(mk('span','${AG_PREFIX}t ${AG_PREFIX}b','AI'));meta.appendChild(mk('span','${AG_PREFIX}k',fmt(bL)));}`);
-                    break;
-                case 'codeBlocks':
-                    metricParts.push(`if(codes>0){meta.appendChild(mk('span','${AG_PREFIX}k','code:'));meta.appendChild(mk('span','${AG_PREFIX}v ${AG_PREFIX}w',''+codes));}`);
-                    break;
-                case 'thinkingIndicator':
-                    metricParts.push(`if(brain)meta.appendChild(mk('span','${AG_PREFIX}v','\\u{1F9E0}'));`);
-                    break;
-                case 'ratio':
-                    metricParts.push(`if(uL>0&&bL>0){meta.appendChild(mk('span','${AG_PREFIX}k',(bL/uL).toFixed(1)+'x'));}`);
-                    break;
-            }
-        }
-
-        const clickHandler = cfg.clickable !== false
-            ? `meta.addEventListener('click',function(){toast('Turn '+tI,null,[['user:',fmt(uL)],['AI:',fmt(bL)],['ratio:',uL>0?(bL/uL).toFixed(1)+'x':'\\u2014']]);});`
-            : '';
-
-        return `
+    return `
 function integrateTurnMeta(){
   var c=document.querySelector(${JSON.stringify(Selectors.TURNS_CONTAINER)});if(!c)return;
   var tI=0;
@@ -408,18 +410,18 @@ function integrateTurnMeta(){
   });
 }
 `;
+  }
+
+  private _genUserBadge(configs: IUserBadgeIntegration[]): string {
+    const cfg = configs[0];
+    let displayExpr = 'fmt(uLen)+" ch"';
+    if (cfg.display === 'wordCount') {
+      displayExpr = '(txt.split(/\\\\s+/).length)+" w"';
+    } else if (cfg.display === 'custom' && cfg.customFormat) {
+      displayExpr = cfg.customFormat;
     }
 
-    private _genUserBadge(configs: IUserBadgeIntegration[]): string {
-        const cfg = configs[0];
-        let displayExpr = 'fmt(uLen)+" ch"';
-        if (cfg.display === 'wordCount') {
-            displayExpr = '(txt.split(/\\\\s+/).length)+" w"';
-        } else if (cfg.display === 'custom' && cfg.customFormat) {
-            displayExpr = cfg.customFormat;
-        }
-
-        return `
+    return `
 function integrateUserBadges(){
   var c=document.querySelector(${JSON.stringify(Selectors.TURNS_CONTAINER)});if(!c)return;
   Array.from(c.children).forEach(function(turn,i){
@@ -437,17 +439,17 @@ function integrateUserBadges(){
   });
 }
 `;
-    }
+  }
 
-    private _genBotAction(configs: IBotActionIntegration[]): string {
-        const items = configs.map(c => {
-            const toastCall = this._genToastCall(c.toast);
-            return `var b=mk('span','${AG_PREFIX}vote');b.textContent=${JSON.stringify(c.icon + ' ' + c.label)};
+  private _genBotAction(configs: IBotActionIntegration[]): string {
+    const items = configs.map(c => {
+      const toastCall = this._genToastCall(c.toast);
+      return `var b=mk('span','${AG_PREFIX}vote');b.textContent=${JSON.stringify(c.icon + ' ' + c.label)};
       b.addEventListener('click',function(ev){ev.stopPropagation();${toastCall}});
       row.appendChild(b);`;
-        });
+    });
 
-        return `
+    return `
 function integrateBotAction(){
   var c=document.querySelector(${JSON.stringify(Selectors.TURNS_CONTAINER)});if(!c)return;
   c.querySelectorAll('span,button,a,div').forEach(function(el){
@@ -461,24 +463,24 @@ function integrateBotAction(){
   });
 }
 `;
-    }
+  }
 
-    private _genDropdown(configs: IDropdownIntegration[]): string {
-        const markers = JSON.stringify(Selectors.DROPDOWN_MARKER_TEXT);
-        const items = configs.map(c => {
-            const toastCall = this._genToastCall(c.toast);
-            const sep = c.separator
-                ? `var sep=mk('div','');sep.style.cssText='height:1px;background:rgba(255,255,255,.06);margin:4px 8px';dd.appendChild(sep);`
-                : '';
-            return `${sep}
+  private _genDropdown(configs: IDropdownIntegration[]): string {
+    const markers = JSON.stringify(Selectors.DROPDOWN_MARKER_TEXT);
+    const items = configs.map(c => {
+      const toastCall = this._genToastCall(c.toast);
+      const sep = c.separator
+        ? `var sep=mk('div','');sep.style.cssText='height:1px;background:rgba(255,255,255,.06);margin:4px 8px';dd.appendChild(sep);`
+        : '';
+      return `${sep}
     var mi=mk('div','${AG_PREFIX}menu');
     ${c.icon ? `mi.appendChild(mk('span','',${JSON.stringify(c.icon)}));` : ''}
     mi.appendChild(document.createTextNode(${JSON.stringify(c.label)}));
     mi.addEventListener('click',function(){${toastCall}});
     dd.appendChild(mi);`;
-        });
+    });
 
-        return `
+    return `
 function integrateDropdown(){
   var dds=document.querySelectorAll('.rounded-bg.py-1,.rounded-lg.py-1');
   dds.forEach(function(dd){
@@ -493,14 +495,14 @@ function integrateDropdown(){
   });
 }
 `;
-    }
+  }
 
-    private _genTitle(configs: ITitleIntegration[]): string {
-        const cfg = configs[0];
-        const toastCall = this._genToastCall(cfg.toast);
-        const event = cfg.interaction || 'dblclick';
+  private _genTitle(configs: ITitleIntegration[]): string {
+    const cfg = configs[0];
+    const toastCall = this._genToastCall(cfg.toast);
+    const event = cfg.interaction || 'dblclick';
 
-        return `
+    return `
 function integrateTitle(){
   var p=document.querySelector(${JSON.stringify(Selectors.PANEL)});if(!p)return;
   var el=p.querySelector(${JSON.stringify(Selectors.TITLE)});
@@ -516,39 +518,39 @@ function integrateTitle(){
   });
 }
 `;
-    }
+  }
 
-    // ─── Main loop ────────────────────────────────────────────────────
+  // ─── Main loop ────────────────────────────────────────────────────
 
-    private _mainLoop(points: IntegrationPoint[]): string {
-        const fnMap: Record<string, string> = {
-            [IntegrationPoint.TOP_BAR]: 'integrateTopBar',
-            [IntegrationPoint.TOP_RIGHT]: 'integrateTopRight',
-            [IntegrationPoint.INPUT_AREA]: 'integrateInputArea',
-            [IntegrationPoint.BOTTOM_ICONS]: 'integrateBottomIcons',
-            [IntegrationPoint.TURN_METADATA]: 'integrateTurnMeta',
-            [IntegrationPoint.USER_BADGE]: 'integrateUserBadges',
-            [IntegrationPoint.BOT_ACTION]: 'integrateBotAction',
-            [IntegrationPoint.DROPDOWN_MENU]: 'integrateDropdown',
-            [IntegrationPoint.CHAT_TITLE]: 'integrateTitle',
-        };
+  private _mainLoop(points: IntegrationPoint[]): string {
+    const fnMap: Record<string, string> = {
+      [IntegrationPoint.TOP_BAR]: 'integrateTopBar',
+      [IntegrationPoint.TOP_RIGHT]: 'integrateTopRight',
+      [IntegrationPoint.INPUT_AREA]: 'integrateInputArea',
+      [IntegrationPoint.BOTTOM_ICONS]: 'integrateBottomIcons',
+      [IntegrationPoint.TURN_METADATA]: 'integrateTurnMeta',
+      [IntegrationPoint.USER_BADGE]: 'integrateUserBadges',
+      [IntegrationPoint.BOT_ACTION]: 'integrateBotAction',
+      [IntegrationPoint.DROPDOWN_MENU]: 'integrateDropdown',
+      [IntegrationPoint.CHAT_TITLE]: 'integrateTitle',
+    };
 
-        const calls = points.map(p => `    ${fnMap[p]}();`).join('\n');
+    const calls = points.map(p => `    ${fnMap[p]} (); `).join('\n');
 
-        return `
-function fullScan(){
+    return `
+    function fullScan() {
 ${calls}
-}
-var _timer=0;
-function debounced(){clearTimeout(_timer);_timer=setTimeout(function(){requestAnimationFrame(fullScan);},400);}
-function start(){
-  var p=document.querySelector(${JSON.stringify(Selectors.PANEL)});
-  if(!p){setTimeout(start,1000);return;}
-  fullScan();
-  new MutationObserver(debounced).observe(p,{childList:true,subtree:true});
-  setInterval(fullScan,8000);
-  console.log('[AG SDK] Active \\u2014 ${points.length} integration points');
-}
-`;
     }
+    var _timer = 0;
+    function debounced() { clearTimeout(_timer); _timer = setTimeout(function () { requestAnimationFrame(fullScan); }, 400); }
+    function start() {
+      var p = document.querySelector(${JSON.stringify(Selectors.PANEL)});
+      if (!p) { setTimeout(start, 1000); return; }
+      fullScan();
+      new MutationObserver(debounced).observe(p, { childList: true, subtree: true });
+      setInterval(fullScan, 8000);
+      console.log('[AG SDK] Active \\u2014 ${points.length} integration points');
+    }
+    `;
+  }
 }

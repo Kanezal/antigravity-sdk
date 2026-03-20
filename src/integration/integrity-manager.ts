@@ -12,9 +12,10 @@
  * Handles not just workbench.html but also workbench.desktop.main.js (auto-run fix),
  * workbench-jetski-agent.html (agent manager patching), and any other modified files.
  *
- * Multi-extension coordination: a registry file (.ag-sdk-integrity.json)
- * in the workbench directory tracks active SDK namespaces and the original
- * hashes, so the last extension to uninstall restores the original state.
+ * Multi-extension coordination: the SDK manifest (ag-sdk-manifest.json)
+ * tracks active extensions. A separate registry (.ag-sdk-integrity.json)
+ * stores the original hashes, so the last extension to uninstall restores
+ * the original state.
  *
  * @module integration/integrity-manager
  *

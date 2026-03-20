@@ -44,6 +44,7 @@ import { EventMonitor } from './transport/event-monitor';
 import { LSBridge } from './transport/ls-bridge';
 import { CascadeManager } from './cascade/cascade-manager';
 import { IntegrationManager } from './integration/integration-manager';
+import { detectAGVersion, AGVersionInfo } from './core/ag-version';
 
 const log = new Logger('SDK');
 
@@ -74,6 +75,7 @@ export interface ISDKOptions {
 export class AntigravitySDK implements IDisposable {
     private readonly _disposables = new DisposableStore();
     private _initialized = false;
+    private _agVersion: AGVersionInfo | null = null;
 
     /** Command bridge for executing Antigravity commands */
     public readonly commands: CommandBridge;
@@ -147,6 +149,17 @@ export class AntigravitySDK implements IDisposable {
 
         log.info('Initializing SDK...');
 
+        // Check installed AG version against supported range
+        this._agVersion = detectAGVersion();
+        if (this._agVersion) {
+            const { version, compatible, supportedRange } = this._agVersion;
+            if (!compatible) {
+                log.warn(`AG v${version} is outside supported range (${supportedRange}) — some features may not work`);
+            } else {
+                log.info(`AG v${version} detected (supported: ${supportedRange})`);
+            }
+        }
+
         // Verify we're running inside Antigravity
         const isAntigravity = await this._detectAntigravity();
         if (!isAntigravity) {
@@ -190,6 +203,14 @@ export class AntigravitySDK implements IDisposable {
         } catch {
             return 'unknown';
         }
+    }
+
+    /**
+     * Get info about the installed Antigravity version and SDK compatibility.
+     * Available after initialize().
+     */
+    get agVersion(): AGVersionInfo | null {
+        return this._agVersion;
     }
 
     /**

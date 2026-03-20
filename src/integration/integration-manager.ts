@@ -325,10 +325,12 @@ export class IntegrationManager implements IIntegrationManager, IDisposable {
             throw new Error('No integration points registered and title proxy not enabled');
         }
 
+        log.debug(`build: ${configs.length} configs, titleProxy=${this._titleProxyEnabled}, ns=${this._namespace}`);
         let script = '';
         if (configs.length > 0) {
-            log.info(`Building script for ${configs.length} integration(s)`);
-            script = this._generator.generate(configs);
+            log.info(`Building script for ${configs.length} integration(s): ${configs.map(c => c.id).join(', ')}`);
+            script = this._generator.generate(configs, this._namespace);
+            log.debug(`build: generated ${script.length} bytes`);
         }
 
         if (this._titleProxyEnabled) {
@@ -340,9 +342,12 @@ export class IntegrationManager implements IIntegrationManager, IDisposable {
     }
 
     /**
-     * Install the generated script into workbench.html.
+     * Install this extension's script into the shared SDK framework.
      *
      * For seamless hot-reload behavior, use `installSeamless()` instead.
+     *
+     * The first extension to call install() patches workbench.html with
+     * the shared loader. Subsequent extensions just register in the manifest.
      *
      * @returns true if the script content actually changed on disk
      */
@@ -362,7 +367,9 @@ export class IntegrationManager implements IIntegrationManager, IDisposable {
             }
         } catch { /* ignore */ }
 
+        log.debug(`install: writing script to ${scriptPath}`);
         this._patcher.install(script);
+        log.debug('install: suppressing integrity check');
         this._integrity.suppressCheck();
         this._patcher.writeHeartbeat();
 
@@ -370,6 +377,7 @@ export class IntegrationManager implements IIntegrationManager, IDisposable {
         log.info(
             `Installed integration (${this._configs.size} points, titleProxy: ${this._titleProxyEnabled}) -> ${scriptPath} [${changed ? 'CHANGED' : 'unchanged'}]`,
         );
+        log.debug(`install: registered extensions = ${this._patcher.getRegisteredExtensions().join(', ') || 'none'}`);
 
         return changed;
     }
@@ -406,7 +414,8 @@ export class IntegrationManager implements IIntegrationManager, IDisposable {
         executeCommand: (command: string) => Thenable<any>,
         showMessage?: (message: string, ...items: string[]) => Thenable<string | undefined>,
     ): Promise<void> {
-        const wasInstalled = this._patcher.isInstalled();
+        const loaderWasPresent = this._patcher.isLoaderInstalled();
+        const wasRegistered = this._patcher.isInstalled();
 
         // Snapshot old content before install
         const scriptPath = this._patcher.getScriptPath();
@@ -419,22 +428,25 @@ export class IntegrationManager implements IIntegrationManager, IDisposable {
 
         const changed = await this.install();
 
-        if (!wasInstalled) {
-            // First install: prompt user
-            log.info('First install. Prompting for reload.');
+        if (!loaderWasPresent) {
+            // First SDK extension ever — loader was just patched into HTML
+            log.info('First SDK install. Prompting for reload.');
             if (showMessage) {
                 const action = await showMessage(
-                    'Better Antigravity installed. Reload to activate.',
+                    'Antigravity SDK installed. Reload to activate.',
                     'Reload Now',
                 );
                 if (action === 'Reload Now') {
                     await executeCommand('workbench.action.reloadWindow');
                 }
             }
+        } else if (!wasRegistered) {
+            // Loader already present (another extension installed it), we just registered
+            log.info('SDK loader already present — extension registered, auto-reloading...');
+            setTimeout(() => executeCommand('workbench.action.reloadWindow'), 500);
         } else if (changed) {
-            // Update: auto-reload (no prompt)
+            // Script content changed (update)
             log.info('Script changed on disk. Auto-reloading window...');
-            // Small delay to let extension finish activation
             setTimeout(() => executeCommand('workbench.action.reloadWindow'), 500);
         } else {
             log.debug('Script unchanged. No reload needed.');
@@ -442,23 +454,36 @@ export class IntegrationManager implements IIntegrationManager, IDisposable {
     }
 
     /**
-     * Remove the integration from workbench.html.
+     * Remove this extension from the SDK framework.
+     *
+     * If this is the last extension, the loader is removed from workbench.html
+     * and all original checksums are restored.
      *
      * ⚠️ Requires Antigravity restart to take effect.
      */
     async uninstall(): Promise<void> {
+        const remaining = this._patcher.getRegisteredExtensions().filter(n => n !== this._namespace);
+        log.debug(`uninstall: removing ns=${this._namespace}, remaining: ${remaining.join(', ') || 'none (last extension)'}`);
         this._patcher.uninstall();
         this._integrity.releaseCheck();
-        this._patcher.removeHeartbeat();
         this.disableAutoRepair();
-        log.info('Uninstalled integration. Restart Antigravity to apply.');
+        log.info(remaining.length > 0
+            ? `Uninstalled ${this._namespace}. ${remaining.length} extension(s) still active.`
+            : `Uninstalled ${this._namespace}. SDK fully removed. Restart Antigravity.`);
     }
 
     /**
-     * Check if an integration is currently installed.
+     * Check if this extension is registered in the SDK framework.
      */
     isInstalled(): boolean {
         return this._patcher.isInstalled();
+    }
+
+    /**
+     * Check if the shared SDK loader is installed in workbench.html.
+     */
+    isLoaderInstalled(): boolean {
+        return this._patcher.isLoaderInstalled();
     }
 
     /**
@@ -497,8 +522,8 @@ export class IntegrationManager implements IIntegrationManager, IDisposable {
      * @returns true if script was updated
      */
     updateScript(): boolean {
-        if (!this._patcher.isInstalled()) {
-            log.warn('Cannot update script — integration is not installed');
+        if (!this._patcher.isLoaderInstalled()) {
+            log.warn('Cannot update script — SDK loader is not installed');
             return false;
         }
 
@@ -581,21 +606,21 @@ export class IntegrationManager implements IIntegrationManager, IDisposable {
 
     private _tryRepair(): void {
         try {
-            if (this._patcher.isInstalled()) {
-                log.debug('Auto-repair: integration still present, no action needed');
+            if (this._patcher.isLoaderInstalled()) {
+                log.debug('Auto-repair: SDK loader still present, no action needed');
                 return;
             }
 
-            if (this._configs.size === 0) {
+            if (this._configs.size === 0 && !this._titleProxyEnabled) {
                 log.debug('Auto-repair: no configs registered, skipping');
                 return;
             }
 
-            log.info('Auto-repair: integration lost (Antigravity update?), re-patching...');
+            log.info('Auto-repair: SDK loader lost (Antigravity update?), re-installing...');
             const script = this.build();
             this._patcher.install(script);
             this._integrity.repair();
-            log.info('Auto-repair: re-patched successfully. Restart Antigravity.');
+            log.info('Auto-repair: re-installed successfully. Restart Antigravity.');
         } catch (err) {
             log.error('Auto-repair failed', err);
         }

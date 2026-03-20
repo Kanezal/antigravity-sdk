@@ -30,6 +30,7 @@ export enum LogLevel {
  */
 export class Logger {
     private static _globalLevel: LogLevel = LogLevel.Warn;
+    private static _outputFn: ((msg: string) => void) | null = null;
 
     /**
      * Set the global log level for all SDK loggers.
@@ -38,6 +39,20 @@ export class Logger {
      */
     static setLevel(level: LogLevel): void {
         Logger._globalLevel = level;
+    }
+
+    /**
+     * Route SDK logs to a VS Code OutputChannel (or any line-based sink).
+     * Pass `null` to disable.
+     *
+     * @example
+     * ```typescript
+     * const out = vscode.window.createOutputChannel('My Extension');
+     * Logger.setOutput(msg => out.appendLine(msg));
+     * ```
+     */
+    static setOutput(fn: ((msg: string) => void) | null): void {
+        Logger._outputFn = fn;
     }
 
     /**
@@ -80,5 +95,13 @@ export class Logger {
                         : console.debug;
 
         fn(prefix, message, ...args);
+
+        if (Logger._outputFn) {
+            const levelStr = LogLevel[level].toUpperCase().padEnd(5);
+            const extra = args.length
+                ? ' ' + args.map(a => a instanceof Error ? a.message : String(a)).join(' ')
+                : '';
+            Logger._outputFn(`[SDK:${this.module}] ${levelStr} ${message}${extra}`);
+        }
     }
 }

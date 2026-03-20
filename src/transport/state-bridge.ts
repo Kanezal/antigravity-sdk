@@ -216,13 +216,15 @@ export class StateBridge implements IDisposable {
             if (!wasmPath) {
                 throw new Error('sql-wasm.wasm not found in any expected location');
             }
+            log.debug(`sql-wasm.wasm located at: ${wasmPath}`);
 
             const SQL = await initSqlJs({
                 locateFile: () => wasmPath!,
             });
             const fileBuffer = fs.readFileSync(dbPath);
+            const fileSizeKb = (fileBuffer.length / 1024).toFixed(1);
             this._db = new SQL.Database(fileBuffer);
-            log.info(`State database opened via sql.js: ${dbPath}`);
+            log.info(`State database opened via sql.js: ${dbPath} (${fileSizeKb} KB)`);
         } catch (error) {
             log.warn('sql.js not available, will use child_process fallback', error);
         }
@@ -246,8 +248,11 @@ export class StateBridge implements IDisposable {
 
         // Block access to sensitive keys
         if (SENSITIVE_KEYS.has(key)) {
+            log.warn(`Blocked access to sensitive key: ${key}`);
             throw new StateReadError(key, 'Access to sensitive keys is blocked by the SDK for security');
         }
+
+        log.debug(`getRawValue: ${key} (${this._db ? 'sql.js' : 'child_process'})`);
 
         try {
             if (this._db) {
@@ -267,6 +272,7 @@ export class StateBridge implements IDisposable {
      * @returns Parsed agent preferences
      */
     async getAgentPreferences(): Promise<IAgentPreferences> {
+        log.debug('getAgentPreferences: reading USS key');
         const raw = await this.getRawValue(USSKeys.AGENT_PREFERENCES);
 
         if (!raw) {
@@ -274,8 +280,11 @@ export class StateBridge implements IDisposable {
             return this._defaultPreferences();
         }
 
+        log.debug(`getAgentPreferences: raw value length=${raw.length}, parsing protobuf sentinels`);
         try {
-            return this._parseAgentPreferences(raw);
+            const prefs = this._parseAgentPreferences(raw);
+            log.debug(`getAgentPreferences: terminalPolicy=${prefs.terminalExecutionPolicy}, secureMode=${prefs.secureModeEnabled}`);
+            return prefs;
         } catch (error) {
             log.error('Failed to parse preferences, returning defaults', error);
             return this._defaultPreferences();

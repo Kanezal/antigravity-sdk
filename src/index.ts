@@ -59,6 +59,7 @@ export {
     SessionNotFoundError,
 } from './core/errors';
 export { Logger, LogLevel } from './core/logger';
+export { detectAGVersion, type AGVersionInfo } from './core/ag-version';
 
 // Transport
 export { CommandBridge, AntigravityCommands } from './transport/command-bridge';

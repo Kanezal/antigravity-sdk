@@ -312,8 +312,11 @@ export class LSBridge {
      */
     async listCascades(): Promise<any> {
         this._ensureReady();
+        log.debug('listCascades: fetching all trajectories');
         const resp = await this._rpc('GetAllCascadeTrajectories', {});
-        return resp?.trajectorySummaries ?? {};
+        const summaries = resp?.trajectorySummaries ?? {};
+        log.debug(`listCascades: ${Object.keys(summaries).length} entries`);
+        return summaries;
     }
 
     /**
@@ -549,14 +552,16 @@ export class LSBridge {
             // Try to identify httpsPort vs httpPort by probing
             // Strategy: try HTTPS first on each port (httpsPort is preferred)
             for (const port of ports) {
+                log.debug(`Probing port ${port} (HTTPS)...`);
                 const tls = await this._probePort(port, true);
-                if (tls) return { port, tls: true };
+                if (tls) { log.debug(`Port ${port} accepted HTTPS`); return { port, tls: true }; }
             }
 
             // Fallback: try HTTP
             for (const port of ports) {
+                log.debug(`Probing port ${port} (HTTP)...`);
                 const http = await this._probePort(port, false);
-                if (http) return { port, tls: false };
+                if (http) { log.debug(`Port ${port} accepted HTTP`); return { port, tls: false }; }
             }
 
         } catch (err) {
@@ -680,6 +685,8 @@ export class LSBridge {
         const protocol = this._useTls ? 'https' : 'http';
         const url = `${protocol}://127.0.0.1:${this._port}/exa.language_server_pb.LanguageServerService/${method}`;
 
+        log.debug(`RPC → ${method} (port=${this._port}, tls=${this._useTls}, csrf=${!!this._csrfToken})`);
+
         return new Promise((resolve, reject) => {
             const body = JSON.stringify(payload);
             const headers: Record<string, string | number> = {
@@ -707,6 +714,7 @@ export class LSBridge {
                 res.on('data', (chunk: string) => { data += chunk; });
                 res.on('end', () => {
                     if (res.statusCode === 200) {
+                        log.debug(`RPC ← ${method} OK (${data.length} bytes)`);
                         try { resolve(JSON.parse(data)); }
                         catch { resolve(data); }
                     } else {
